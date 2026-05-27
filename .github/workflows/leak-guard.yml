@@ -1,0 +1,52 @@
+name: leak-guard
+
+# Enforces the public/closed boundary from DISCLOSURE-POLICY.md.
+# This is a safety net against ACCIDENTAL leaks — not a substitute for judgement.
+# It deliberately does NOT list detector names (that would itself be a leak);
+# it blocks the shapes a leak usually takes: engine source files, secrets, and
+# references to internal-only locations.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No engine/source files in the docs repo
+        run: |
+          # This repo carries docs + release metadata only — never source.
+          if git ls-files | grep -E '\.(cpp|cc|cxx|h|hpp|rs|ts|tsx|lua)$'; then
+            echo "::error::Source files must not live in the public docs repo."
+            exit 1
+          fi
+
+      - name: No references to internal-only locations
+        run: |
+          # Markers that signal private monorepo content slipped in.
+          if grep -RInE 'cheat-research|apps/client/src|packages/resources/.+/(server|client)\.lua|internal-only' \
+               --include='*.md' . ; then
+            echo "::error::Reference to internal-only location found. See DISCLOSURE-POLICY.md."
+            exit 1
+          fi
+
+      - name: No secrets or private keys
+        run: |
+          if grep -RInE -- '-----BEGIN [A-Z ]*PRIVATE KEY-----|AKIA[0-9A-Z]{16}|(api|secret|tenant)_key["'"'"']?\s*[:=]\s*["'"'"'][A-Za-z0-9_\-]{16,}' \
+               --include='*.md' --include='*.yml' --include='*.yaml' . ; then
+            echo "::error::Possible secret committed. Remove it and rotate the credential."
+            exit 1
+          fi
+
+      - name: Threshold-shaped content warning
+        run: |
+          # Heuristic nudge: detection wording paired with concrete numbers often
+          # leaks a threshold. This WARNS (does not fail) — a human reviews it.
+          if grep -RInE 'threshold|tolerance|detect(s|ion)?\b' --include='*.md' . \
+               | grep -E '[0-9]+(\.[0-9]+)?\s*(ms|px|m/s|meters|hz|%)' ; then
+            echo "::warning::Detection wording near a concrete number — confirm it is not a real threshold."
+          fi
